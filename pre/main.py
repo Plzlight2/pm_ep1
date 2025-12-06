@@ -4,61 +4,47 @@ import os
 from glob import glob
 
 # ===== 根目录 =====
-root_dir = "./output"
+root_dir = "../raw_data"
+eps = 1e-6
+to_save_dir = "../data"
 
-eps = 1e-6  # 防止除零
+image_files = sorted(glob(os.path.join(root_dir, "*.bmp")))
+print(f"找到 {len(image_files)} 张图像")
 
-# ===== 遍历所有子文件夹 =====
-for folder in sorted(glob(os.path.join(root_dir, "*"))):
-    if not os.path.isdir(folder):
-        continue
+# ===== 逐张处理 =====
+for file in image_files:
+    base_name = os.path.splitext(os.path.basename(file))[0]
+    save_dir = os.path.join(to_save_dir, base_name)
+    os.makedirs(save_dir, exist_ok=True)
 
-    print(f"📂 正在处理文件夹: {folder}")
+    print(f"正在处理: {file}")
 
-    # 匹配 .tiff / .tif 文件
-    image_files = glob(os.path.join(folder, "*.tiff")) + glob(os.path.join(folder, "*.tif"))
-    if not image_files:
-        print(f"⚠️ 未找到图像文件: {folder}")
-        continue
+    # ===== 读取原始图像 =====
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    img = img.astype(np.float32)
+    h, w = img.shape
 
-    for file in sorted(image_files):
-        base_name = os.path.splitext(os.path.basename(file))[0]
-        save_dir = os.path.join(folder, base_name)
-        os.makedirs(save_dir, exist_ok=True)
+    # ===== 解码四个偏振方向 =====
+    I0 = img[0:h:2, 0:w:2]
+    I45 = img[0:h:2, 1:w:2]
+    I90 = img[1:h:2, 0:w:2]
+    I135 = img[1:h:2, 1:w:2]
 
-        # ====== 读取原始图像 ======
-        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-        if img is None:
-            print(f"❌ 无法读取图像: {file}")
-            continue
+    # ===== 强度图 =====
+    Intensity = (I0 + I90) / 2.0
+    cv2.imwrite(os.path.join(save_dir, "Intensity.bmp"), Intensity.astype(np.uint8))
 
-        img = img.astype(np.float32)
-        h, w = img.shape
+    # ===== 偏振度图 DoLP =====
+    DoLP = np.sqrt((I0 - I90) ** 2 + (I45 - I135) ** 2) / (I0 + I90 + eps)
+    DoLP = np.clip(DoLP, 0, 1)
+    cv2.imwrite(os.path.join(save_dir, "DoLP.tiff"), (DoLP * 65535).astype(np.uint16))
 
-        # ====== 解码四个偏振方向 ======
-        I0   = img[0:h:2, 0:w:2]
-        I45  = img[0:h:2, 1:w:2]
-        I90  = img[1:h:2, 0:w:2]
-        I135 = img[1:h:2, 1:w:2]
+    # ===== 偏振角图 AoLP' =====
+    AoLP = 0.5 * np.arctan2((I45 - I135), (I0 - I90))
+    AoLP_sin = np.sin(2 * AoLP)
+    AoLP_cos = np.cos(2 * AoLP)
 
-        # ====== 强度图 ======
-        Intensity = (I0 + I90) / 2.0
-        cv2.imwrite(os.path.join(save_dir, "Intensity.tiff"), Intensity.astype(np.uint16))
+    cv2.imwrite(os.path.join(save_dir, "AoLP_sin.tiff"), ((AoLP_sin + 1.0) * 32767.5).astype(np.uint16))
+    cv2.imwrite(os.path.join(save_dir, "AoLP_cos.tiff"), ((AoLP_cos + 1.0) * 32767.5).astype(np.uint16))
 
-        # ====== 偏振度图 (DoLP) ======
-        DoLP = np.sqrt((I0 - I90)**2 + (I45 - I135)**2) / (I0 + I90 + eps)
-        DoLP = np.clip(DoLP, 0, 1)
-        cv2.imwrite(os.path.join(save_dir, "DoLP.tiff"), (DoLP * 65535).astype(np.uint16))
-
-        # ====== 偏振角图 (AoLP) ======
-        AoLP = 0.5 * np.arctan2((I45 - I135), (I0 - I90))  # [-π/2, π/2]
-        AoLP_norm = (AoLP + np.pi/2) / np.pi               # 归一化到 [0,1]
-        cv2.imwrite(os.path.join(save_dir, "AoLP.tiff"), (AoLP_norm * 65535).astype(np.uint16))
-
-        # ====== 删除原图像 ======
-        try:
-            os.remove(file)
-        except Exception as e:
-            print(f"⚠️ 删除失败: {file}, 原因: {e}")
-
-        print(f"✅ 处理完成: {file} → {save_dir}")
+print("处理完成！")
